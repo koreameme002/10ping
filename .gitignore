@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment / Sessions
+session_*.json
+naver_session.json
+tistory_session.json
+tenping_session.json
+selected_info.json
+campaign_list.json
+debug_output.txt
+
+# Local Config (Sensitive)
+config.py
+
+# Others
+.env
+.idea/
+.vscode/
+*.html
+*.png
+*.webp
