@@ -1,8 +1,4 @@
 playwright
-asyncio
 groq
 python-dotenv
-re
-json
-os
 async-playwright
