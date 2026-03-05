@@ -231,6 +231,23 @@ async def extract_tenping_info(campaign_url=None):
                 precautions = await page.inner_text(".notice_area, .caution_area", timeout=2000)
             except: pass
 
+            # 8. 소문 배너 퍼가기 HTML 코드 추출
+            banner_html = ""
+            try:
+                # 텐핑 상세 페이지에서 배너 코드가 있는 textarea 찾기
+                # 보통 textarea#html_url, .textarea_copy 또는 <a><img>가 포함된 코드 블록
+                banner_selectors = ["textarea#html_url", ".textarea_copy", "textarea"]
+                for sel in banner_selectors:
+                    els = page.locator(sel)
+                    count = await els.count()
+                    for i in range(count):
+                        val = await els.nth(i).input_value(timeout=1000)
+                        if val and "<a href" in val and "<img" in val:
+                            banner_html = val.strip()
+                            break
+                    if banner_html: break
+            except: pass
+
             print(f"[추출기] 추출 완료: {title[:20]}...")
             return {
                 "title": title,
@@ -240,7 +257,8 @@ async def extract_tenping_info(campaign_url=None):
                 "images": image_urls,
                 "qr": qr_url,
                 "tags": recommended_tags,
-                "precautions": precautions
+                "precautions": precautions,
+                "banner_html": banner_html
             }
         except Exception as e:
             print(f"[추출기] 정보 추출 실패: {e}")

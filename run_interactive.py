@@ -66,7 +66,7 @@ async def main():
     # 티스토리 포스팅
     print("\n>>> 티스토리 블로그 작업 중...")
     tags = ",".join(campaign_info.get('tags', ['재테크', '정보', '이벤트']))
-    tistory_browser = await auto_poster.post_to_tistory(tistory_title, tistory_content, tags)
+    tistory_browser = await auto_poster.post_to_tistory(tistory_title, tistory_content, tags, campaign_info)
 
     print("\n" + "="*50)
     print(" 모든 작업이 완료되었습니다! ")

@@ -60,7 +60,40 @@ async def generate_content(campaign_info, platform="naver"):
     )
     return chat_completion.choices[0].message.content
 
-async def post_to_tistory(title, content, tags):
+def format_html_content(content, campaign_info):
+    """생성된 텍스트 본문을 HTML 형식으로 변환하고 각종 요소를 삽입합니다."""
+    # 1. 기본 줄바꿈 처리
+    html_content = content.replace('\n', '<br>')
+    
+    # 2. 이미지 삽입 (상단에 모아서 배치)
+    images_html = ""
+    if campaign_info.get('images'):
+        for img in campaign_info['images'][:3]: # 최대 3개
+            images_html += f'<div style="text-align:center; margin:20px 0;"><img src="{img}" style="max-width:100%;"></div>'
+            
+    if images_html:
+        html_content = images_html + "<br><br>" + html_content
+        
+    # 3. 제휴 링크 버튼화
+    if campaign_info.get('url'):
+        btn_html = f'''<div style="text-align:center; margin:30px 0;">
+            <a href="{campaign_info['url']}" target="_blank" style="display:inline-block; padding:15px 30px; background-color:#1cc800; color:#fff; font-size:20px; font-weight:bold; border-radius:10px; text-decoration:none;">👉 상세 혜택 확인 및 신청하기 👈</a></div>'''
+        
+        # 본문 내에 링크 텍스트가 있으면 치환 시도
+        if campaign_info['url'] in html_content:
+            html_content = html_content.replace(campaign_info['url'], btn_html)
+        else:
+            # 없으면 맨 뒤에 추가
+            html_content += "<br><br>" + btn_html
+
+    # 4. 소문 배너 삽입 (마지막)
+    if campaign_info.get('banner_html'):
+        html_content += f'<div style="text-align:center; margin-top:50px;">{campaign_info["banner_html"]}</div>'
+        
+    return html_content
+
+async def post_to_tistory(title, content, tags=None, campaign_info=None):
+    if campaign_info is None: campaign_info = {}
     p = await async_playwright().start()
     if not os.path.exists(config.TISTORY_SESSION_PATH):
         print("티스토리 세션 파일이 없습니다.")
@@ -83,9 +116,17 @@ async def post_to_tistory(title, content, tags):
         # 2. 본문 입력 (TinyMCE iframe 사용)
         print("[티스토리] 본문 입력 중...")
         editor_frame = page.frame_locator("#editor-tistory_ifr")
-        await editor_frame.locator("body#tinymce").click()
+        
+        # 서식 초기화 및 HTML 주입
+        html_to_insert = format_html_content(content, campaign_info)
+        
+        # iframe 내부 document에 접근하여 HTML 삽입
+        await editor_frame.locator("body#tinymce").evaluate(f'''(body) => {{
+            body.focus();
+            document.execCommand('insertHTML', false, `{html_to_insert}`);
+        }}''')
+        
         await asyncio.sleep(1)
-        await page.keyboard.type(content)
         
         # 3. 태그 입력
         if tags:
@@ -180,6 +221,9 @@ async def post_to_naver(title, content, campaign_info):
         print("[네이버] 본문 입력 중...")
         content_selectors = [".se-main-container .se-placeholder", ".se-content", ".se-component-content", ".se-main-container"]
         success = False
+        
+        html_to_insert = format_html_content(content, campaign_info)
+        
         for sel in content_selectors:
             try:
                 el = main_frame.locator(sel).first
@@ -187,12 +231,12 @@ async def post_to_naver(title, content, campaign_info):
                     await el.click()
                     await asyncio.sleep(0.5)
                     
-                    # 이미지 링크 멘트 추가
-                    image_ment = ""
-                    if campaign_info.get('images'):
-                        image_ment = "[참고: 아래 이미지를 본문에 삽입하는 것을 추천합니다]\n" + "\n".join(campaign_info['images'][:3]) + "\n\n"
+                    # 네이버 에디터는 iframe 밖에서 iframe 안의 contenteditable 요소에 접근
+                    await el.evaluate(f'''(el) => {{
+                        document.execCommand('removeFormat', false, null); // 기존 서식(취소선 등) 제거
+                        document.execCommand('insertHTML', false, `{html_to_insert}`);
+                    }}''')
                     
-                    await page.keyboard.type(image_ment + content, delay=5)
                     success = True
                     break
             except: continue
@@ -200,7 +244,12 @@ async def post_to_naver(title, content, campaign_info):
         if not success:
             print("[네이버] 본문 입력 영역을 찾지 못해 Tab 이동 후 입력을 시도합니다.")
             await page.keyboard.press("Tab") # 제목 다음은 본문
-            await page.keyboard.type(content)
+            await asyncio.sleep(0.5)
+            # 현재 활성화된 요소(포커스)에 HTML 삽입
+            await main_frame.evaluate(f'''() => {{
+                document.execCommand('removeFormat', false, null);
+                document.execCommand('insertHTML', false, `{html_to_insert}`);
+            }}''')
         
         print(f"[네이버] 포스팅 입력 완료 (임시저장 확인 필요)")
         print("[네이버] 브라우저를 유지합니다.")
