@@ -12,13 +12,17 @@ client = Groq(api_key=config.GROQ_API_KEY)
 TARGET_CAMPAIGN_URL = None 
 # ========================
 
-async def generate_content(campaign_info):
+async def generate_content(campaign_info, platform="naver"):
     """
     참조 블로그(cobe_fair) 스타일을 반영하여 고품질 원고를 생성합니다.
+    platform: "naver" 또는 "tistory"
     """
+    
+    platform_name = "네이버 블로그" if platform == "naver" else "티스토리"
+    
     prompt = f"""
     당신은 전문 블로거이자 제휴 마케터입니다. 
-    아래의 캠페인 정보와 참조 블로그 스타일을 바탕으로 네이버 블로그에 최적화된 고품질 포스팅 원고를 작성해 주세요.
+    아래의 캠페인 정보와 참조 블로그 스타일을 바탕으로 {platform_name}에 최적화된 고품질 포스팅 원고를 작성해 주세요.
     
     [캠페인 정보]
     - 제목: {campaign_info['title']}
@@ -37,11 +41,12 @@ async def generate_content(campaign_info):
        - [무료입장 신청하기] 형태의 강력한 CTA 포함
     4. 톤앤매너: 친절하고 신뢰감 있는 "공식 블로그" 말투. 이모지 적극 활용.
     
-    [작성 지침]
+    [작성 지침 ({platform_name}용)]
     1. 제목은 반드시 [지역/행사명]을 포함하되 클릭을 유도하는 후크를 넣으세요.
     2. 본문 중간에 자연스럽게 [신청 링크]를 '직접 클릭 가능한 형태'로 2~3번 언급하세요.
     3. 유튜브 링크가 있다면 "영상으로 미리보기" 섹션을 만들어 언급하세요.
     4. 마지막에는 반드시 공정위 문구("이 포스팅은 소정의 수익이 발생할 수 있습니다")를 포함하세요.
+    {"5. 네이버 블로그는 이모지를 더 적극적으로 사용하고, 티스토리는 조금 더 정돈된 레이아웃을 선호합니다." if platform == "tistory" else ""}
     
     출력 형식:
     TITLE: [제목]
