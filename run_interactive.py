@@ -51,10 +51,10 @@ async def main():
     # AI 본문 생성
     print("AI를 통해 블로그 본문을 생성하고 있습니다...")
     naver_title = f"[추천] {campaign_info['title']} 신청 및 혜택 총정리!"
-    naver_content = auto_poster.generate_content(campaign_info, platform="naver")
+    naver_content = await auto_poster.generate_content(campaign_info, platform="naver")
     
     tistory_title = f"{campaign_info['title']} 상세 안내 및 이벤트 참여 방법"
-    tistory_content = auto_poster.generate_content(campaign_info, platform="tistory")
+    tistory_content = await auto_poster.generate_content(campaign_info, platform="tistory")
 
     # 4. 포스팅 실행
     print("\n[3/3] 포스팅을 시작합니다.")
