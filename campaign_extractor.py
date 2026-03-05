@@ -146,22 +146,43 @@ async def extract_tenping_info(campaign_url=None):
             # 1. 제목 추출
             title = "추천 제휴 캠페인"
             try:
-                # 소문 정보 페이지 상단의 큰 제목 타겟
-                title_text = await page.inner_text(".camp_info .tit, h2.tit", timeout=3000)
-                if title_text.strip(): title = title_text.strip()
-            except: 
-                try: title = await page.title()
-                except: pass
+                # 더 폭넓은 제목 셀렉터 시도
+                title_selectors = [
+                    ".camp_info .tit", "h2.tit", ".detail_header h2", 
+                    "h2", ".subject", "title"
+                ]
+                for sel in title_selectors:
+                    try:
+                        title_text = await page.inner_text(sel, timeout=2000)
+                        if title_text.strip() and title_text.strip() != "텐핑":
+                            title = title_text.strip()
+                            break
+                    except: continue
+            except: pass
             
             # 2. 메시지 복사하기 내용 및 홍보 링크 추출
             message_content = ""
             affiliate_url = ""
             try:
-                message_content = await page.inner_text("#textMessage", timeout=5000)
+                # 홍보 문구 추출 (id가 textMessage인 경우가 많음)
+                message_selectors = ["#textMessage", ".msg_box", ".copy_text"]
+                for sel in message_selectors:
+                    try:
+                        message_content = await page.inner_text(sel, timeout=3000)
+                        if message_content.strip(): break
+                    except: continue
+
                 # iryan.kr 또는 tenping.kr 링크 추출
-                url_match = re.search(r'https?://(?:iryan\.kr|tenping\.kr/i/)[^\s]+', message_content)
-                if url_match:
-                    affiliate_url = url_match.group(0)
+                if message_content:
+                    url_match = re.search(r'https?://(?:iryan\.kr|tenping\.kr/i/)[^\s]+', message_content)
+                    if url_match:
+                        affiliate_url = url_match.group(0)
+                
+                # 별도로 링크 버튼에서 추출 시도
+                if not affiliate_url:
+                    link_btn = page.locator("a[href*='iryan.kr'], a[href*='tenping.kr/i/']").first
+                    if await link_btn.count() > 0:
+                        affiliate_url = await link_btn.get_attribute("href")
             except: pass
             
             # 3. 유튜브 링크 추출

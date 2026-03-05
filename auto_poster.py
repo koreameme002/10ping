@@ -61,161 +61,153 @@ async def generate_content(campaign_info, platform="naver"):
     return chat_completion.choices[0].message.content
 
 async def post_to_tistory(title, content, tags):
-    async with async_playwright() as p:
-        if not os.path.exists(config.TISTORY_SESSION_PATH):
-            print("티스토리 세션 파일이 없습니다.")
-            return
+    p = await async_playwright().start()
+    if not os.path.exists(config.TISTORY_SESSION_PATH):
+        print("티스토리 세션 파일이 없습니다.")
+        return None
 
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(storage_state=config.TISTORY_SESSION_PATH)
-        page = await context.new_page()
+    browser = await p.chromium.launch(headless=False)
+    context = await browser.new_context(storage_state=config.TISTORY_SESSION_PATH)
+    page = await context.new_page()
 
-        try:
-            write_url = f"https://{config.TISTORY_BLOG_NAME}.tistory.com/manage/newpost/"
-            await page.goto(write_url)
-            await page.wait_for_load_state("networkidle")
-            
-            # 1. 제목 입력
-            print("[티스토리] 제목 입력 중...")
-            await page.wait_for_selector("#post-title-inp", timeout=10000)
-            await page.fill("#post-title-inp", title)
-            
-            # 2. 본문 입력 (TinyMCE iframe 사용)
-            print("[티스토리] 본문 입력 중...")
-            # 에디터 프레임 대기
-            editor_frame = page.frame_locator("#editor-tistory_ifr")
-            await editor_frame.locator("body#tinymce").click()
-            await asyncio.sleep(1)
-            
-            # 본문을 한 자씩 입력하기보다 한 번에 붙여넣기 시도 (안정성)
-            # await page.keyboard.type(content, delay=1)
-            # 또는 clipboard 활용이 좋지만 playwright에서는 type이 무난
-            await page.keyboard.type(content)
-            
-            # 3. 태그 입력
-            if tags:
-                print("[티스토리] 태그 입력 중...")
-                await page.fill("#tagText", tags)
-                await page.keyboard.press("Enter")
+    try:
+        write_url = f"https://{config.TISTORY_BLOG_NAME}.tistory.com/manage/newpost/"
+        await page.goto(write_url)
+        await page.wait_for_load_state("networkidle")
+        
+        # 1. 제목 입력
+        print("[티스토리] 제목 입력 중...")
+        await page.wait_for_selector("#post-title-inp", timeout=10000)
+        await page.fill("#post-title-inp", title)
+        
+        # 2. 본문 입력 (TinyMCE iframe 사용)
+        print("[티스토리] 본문 입력 중...")
+        editor_frame = page.frame_locator("#editor-tistory_ifr")
+        await editor_frame.locator("body#tinymce").click()
+        await asyncio.sleep(1)
+        await page.keyboard.type(content)
+        
+        # 3. 태그 입력
+        if tags:
+            print("[티스토리] 태그 입력 중...")
+            await page.fill("#tagText", tags)
+            await page.keyboard.press("Enter")
 
-            print(f"[티스토리] 입력 완료 (수동 확인 필요)")
-            # 브라우저를 닫지 않고 유지
-            print("[티스토리] 브라우저를 유지합니다. 수동으로 수정/발행 후 닫아주세요.")
-        except Exception as e:
-            print(f"[티스토리] 오류: {e}")
-        # finally:
-        #     await browser.close() # 닫지 않음
+        print(f"[티스토리] 입력 완료 (수동 확인 필요)")
+        print("[티스토리] 브라우저를 유지합니다.")
+        return browser # 브라우저 객체 반환
+    except Exception as e:
+        print(f"[티스토리] 오류: {e}")
+        return None
 
 async def post_to_naver(title, content, campaign_info):
-    async with async_playwright() as p:
-        if not os.path.exists(config.NAVER_SESSION_PATH):
-            print("네이버 세션 파일이 없습니다.")
-            return
+    p = await async_playwright().start()
+    if not os.path.exists(config.NAVER_SESSION_PATH):
+        print("네이버 세션 파일이 없습니다.")
+        return None
 
-        # 디버깅을 위해 headless=False 유지
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(storage_state=config.NAVER_SESSION_PATH)
-        page = await context.new_page()
+    # 디버깅을 위해 headless=False 유지
+    browser = await p.chromium.launch(headless=False)
+    context = await browser.new_context(storage_state=config.NAVER_SESSION_PATH)
+    page = await context.new_page()
 
+    try:
+        # 1. 글쓰기 페이지 진입
+        print("[네이버] 글쓰기 페이지 진입 중...")
+        write_url = f"https://blog.naver.com/{config.NAVER_ID}?Redirect=Write"
+        await page.goto(write_url)
+        await page.wait_for_load_state("networkidle")
+        await asyncio.sleep(3)
+        
+        # 2. mainFrame 찾기
+        main_frame = page.frame_locator("#mainFrame")
+        
+        # 3. 팝업 및 도움말 제거 (이어서 쓰기 팝업 포함)
+        print("[네이버] 팝업 및 도움말 제거...")
+        # '이어서 쓰기' 팝업 등 네이버 기본 알럿 창 닫기 시도
         try:
-            # 1. 글쓰기 페이지 진입
-            print("[네이버] 글쓰기 페이지 진입 중...")
-            write_url = f"https://blog.naver.com/{config.NAVER_ID}?Redirect=Write"
-            await page.goto(write_url)
-            await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(3)
+            # '취소' 버튼 (새로 쓰기)
+            cancel_btn = main_frame.locator(".se-popup-button-cancel, button:has-text('취소'), .btn_cancel")
+            if await cancel_btn.is_visible():
+                await cancel_btn.click()
+                print("[네이버] 이어서 쓰기 팝업 취소 클릭")
+                await asyncio.sleep(1)
+        except: pass
+
+        for _ in range(3):
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.5)
             
-            # 2. mainFrame 찾기
-            main_frame = page.frame_locator("#mainFrame")
-            
-            # 3. 팝업 및 도움말 제거 (이어서 쓰기 팝업 포함)
-            print("[네이버] 팝업 및 도움말 제거...")
-            # '이어서 쓰기' 팝업 등 네이버 기본 알럿 창 닫기 시도
-            # "작성 중인 글이 있습니다. 이어서 쓰시겠습니까?" -> 취소(새로 쓰기) 클릭
+            # 프레임 내부의 닫기 버튼들
+            selectors = [
+                ".se-help-close", ".se-help-container .se-button-close", 
+                "button:has-text('도움말 닫기')", ".se-popup-button-cancel",
+                ".se-popup-button-close", ".btn_close", ".se-popup-close"
+            ]
+            for sel in selectors:
+                try:
+                    btn = main_frame.locator(sel)
+                    if await btn.is_visible():
+                        await btn.click(timeout=1000)
+                        print(f"[네이버] 프레임 내부 닫기 버튼 클릭: {sel}")
+                except: pass
+
+        # 4. 제목 입력
+        print("[네이버] 제목 입력 중...")
+        # 제목 셀렉터 후보들
+        title_selectors = [".se-documentTitle .se-placeholder", ".se-title-text", "[contenteditable='true'].se-documentTitle"]
+        success = False
+        for sel in title_selectors:
             try:
-                # '취소' 버튼 (새로 쓰기)
-                cancel_btn = main_frame.locator(".se-popup-button-cancel, button:has-text('취소'), .btn_cancel")
-                if await cancel_btn.is_visible():
-                    await cancel_btn.click()
-                    print("[네이버] 이어서 쓰기 팝업 취소 클릭")
-                    await asyncio.sleep(1)
-            except: pass
+                el = main_frame.locator(sel).first
+                if await el.is_visible():
+                    await el.click()
+                    await asyncio.sleep(0.5)
+                    # 이미 텍스트가 있을 수 있으므로 모두 선택 후 삭제 시도
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Backspace")
+                    await page.keyboard.type(title, delay=20)
+                    success = True
+                    break
+            except: continue
+        
+        if not success:
+            print("[네이버] 제목 입력 영역을 찾지 못해 강제 입력을 시도합니다.")
+            await page.keyboard.press("Tab") # 보통 첫 번째는 제목
+            await page.keyboard.type(title)
 
-            for _ in range(3):
-                await page.keyboard.press("Escape")
-                await asyncio.sleep(0.5)
-                
-                # 프레임 내부의 닫기 버튼들
-                selectors = [
-                    ".se-help-close", ".se-help-container .se-button-close", 
-                    "button:has-text('도움말 닫기')", ".se-popup-button-cancel",
-                    ".se-popup-button-close", ".btn_close", ".se-popup-close"
-                ]
-                for sel in selectors:
-                    try:
-                        btn = main_frame.locator(sel)
-                        if await btn.is_visible():
-                            await btn.click(timeout=1000)
-                            print(f"[네이버] 프레임 내부 닫기 버튼 클릭: {sel}")
-                    except: pass
+        # 5. 본문 입력
+        print("[네이버] 본문 입력 중...")
+        content_selectors = [".se-main-container .se-placeholder", ".se-content", ".se-component-content", ".se-main-container"]
+        success = False
+        for sel in content_selectors:
+            try:
+                el = main_frame.locator(sel).first
+                if await el.is_visible():
+                    await el.click()
+                    await asyncio.sleep(0.5)
+                    
+                    # 이미지 링크 멘트 추가
+                    image_ment = ""
+                    if campaign_info.get('images'):
+                        image_ment = "[참고: 아래 이미지를 본문에 삽입하는 것을 추천합니다]\n" + "\n".join(campaign_info['images'][:3]) + "\n\n"
+                    
+                    await page.keyboard.type(image_ment + content, delay=5)
+                    success = True
+                    break
+            except: continue
 
-            # 4. 제목 입력
-            print("[네이버] 제목 입력 중...")
-            # 제목 셀렉터 후보들
-            title_selectors = [".se-documentTitle .se-placeholder", ".se-title-text", "[contenteditable='true'].se-documentTitle"]
-            success = False
-            for sel in title_selectors:
-                try:
-                    el = main_frame.locator(sel).first
-                    if await el.is_visible():
-                        await el.click()
-                        await asyncio.sleep(0.5)
-                        # 이미 텍스트가 있을 수 있으므로 모두 선택 후 삭제 시도
-                        await page.keyboard.press("Control+A")
-                        await page.keyboard.press("Backspace")
-                        await page.keyboard.type(title, delay=20)
-                        success = True
-                        break
-                except: continue
-            
-            if not success:
-                print("[네이버] 제목 입력 영역을 찾지 못해 강제 입력을 시도합니다.")
-                await page.keyboard.press("Tab") # 보통 첫 번째는 제목
-                await page.keyboard.type(title)
-
-            # 5. 본문 입력
-            print("[네이버] 본문 입력 중...")
-            content_selectors = [".se-main-container .se-placeholder", ".se-content", ".se-component-content", ".se-main-container"]
-            success = False
-            for sel in content_selectors:
-                try:
-                    el = main_frame.locator(sel).first
-                    if await el.is_visible():
-                        await el.click()
-                        await asyncio.sleep(0.5)
-                        
-                        # 이미지 링크 멘트 추가
-                        image_ment = ""
-                        if campaign_info.get('images'):
-                            image_ment = "[참고: 아래 이미지를 본문에 삽입하는 것을 추천합니다]\n" + "\n".join(campaign_info['images'][:3]) + "\n\n"
-                        
-                        await page.keyboard.type(image_ment + content, delay=5)
-                        success = True
-                        break
-                except: continue
-
-            if not success:
-                print("[네이버] 본문 입력 영역을 찾지 못해 Tab 이동 후 입력을 시도합니다.")
-                await page.keyboard.press("Tab") # 제목 다음은 본문
-                await page.keyboard.type(content)
-            
-            print(f"[네이버] 포스팅 입력 완료 (임시저장 확인 필요)")
-            # 브라우저를 닫지 않고 유지
-            print("[네이버] 브라우저를 유지합니다. 수동으로 수정/발행 후 닫아주세요.")
-        except Exception as e:
-            print(f"[네이버] 오류: {e}")
-        # finally:
-        #     await browser.close() # 닫지 않음
+        if not success:
+            print("[네이버] 본문 입력 영역을 찾지 못해 Tab 이동 후 입력을 시도합니다.")
+            await page.keyboard.press("Tab") # 제목 다음은 본문
+            await page.keyboard.type(content)
+        
+        print(f"[네이버] 포스팅 입력 완료 (임시저장 확인 필요)")
+        print("[네이버] 브라우저를 유지합니다.")
+        return browser
+    except Exception as e:
+        print(f"[네이버] 오류: {e}")
+        return None
 
 if __name__ == "__main__":
     async def main():

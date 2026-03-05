@@ -61,16 +61,23 @@ async def main():
     
     # 네이버 포스팅
     print("\n>>> 네이버 블로그 작업 중...")
-    await auto_poster.post_to_naver(naver_title, naver_content, campaign_info)
+    naver_browser = await auto_poster.post_to_naver(naver_title, naver_content, campaign_info)
     
     # 티스토리 포스팅
     print("\n>>> 티스토리 블로그 작업 중...")
     tags = ",".join(campaign_info.get('tags', ['재테크', '정보', '이벤트']))
-    await auto_poster.post_to_tistory(tistory_title, tistory_content, tags)
+    tistory_browser = await auto_poster.post_to_tistory(tistory_title, tistory_content, tags)
 
     print("\n" + "="*50)
     print(" 모든 작업이 완료되었습니다! ")
+    print(" 브라우저 창이 열려 있습니다. 확인 후 종료하려면 Enter를 누르세요.")
     print("="*50)
+    
+    input("\n종료하려면 Enter를 누르세요...")
+    
+    # 종료 시 브라우저 닫기 시도 (선택 사항)
+    if naver_browser: await naver_browser.close()
+    if tistory_browser: await tistory_browser.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
