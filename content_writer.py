@@ -93,7 +93,7 @@ SLIDE_BANNER_HTML = """
   }}
   dots.forEach(function(d,i){{d.addEventListener('click',function(){{go(i);}});}});
   setInterval(function(){{go(idx+1);}},3500);
-}}})();
+}})();
 </script>
 """
 
