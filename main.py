@@ -3,6 +3,7 @@ import requests
 import logging
 import re
 import argparse
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 def _now_kst():
@@ -13,7 +14,7 @@ from dotenv import load_dotenv
 # 모듈 로드
 from keyword_analyzer import KeywordAnalyzer
 from tenping_partner import TenpingPartnerAPI
-from content_writer import ContentWriter
+from content_writer import ContentWriter, _parse_ai_campaign_response
 from telegram_notifier import TelegramNotifier
 
 load_dotenv()
@@ -159,45 +160,131 @@ class AutoPublisherController:
             )
             self.notifier.send_message(msg)
 
+    def _is_already_posted(self, product_url: str) -> bool:
+        """_posts 폴더의 기존 마크다운 포스트에서 해당 productUrl이 이미 포함되어 있는지 확인"""
+        if not os.path.exists(self.post_dir):
+            return False
+        
+        if not product_url:
+            return False
+            
+        for filename in os.listdir(self.post_dir):
+            if not filename.endswith(".md"):
+                continue
+            file_path = os.path.join(self.post_dir, filename)
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if product_url in content:
+                        return True
+            except Exception as e:
+                logging.error(f"기존 포스트 {filename} 읽기 중 오류 발생: {e}")
+        return False
+
+    def run_tenping_campaign_pipeline(self):
+        """텐핑 최신 광고를 수집하여 중복이 없는 캠페인을 포스팅하는 다이내믹 파이프라인"""
+        logging.info("=========================================")
+        logging.info("텐핑 최신 캠페인 기반 포스팅 파이프라인 시작")
+        logging.info("=========================================")
+
+        # 1. 텐핑 API로 최신 광고 목록 30개 수집
+        campaigns = self.tenping.search_products("", limit=30)
+        if not campaigns:
+            logging.error("수집된 텐핑 캠페인이 없습니다. 파이프라인을 종료합니다.")
+            return
+
+        # 2. 미발행 캠페인 선별 (최신순이므로 리스트 순서대로 검사)
+        target_campaign = None
+        for camp in campaigns:
+            url = camp.get("productUrl", "")
+            if not self._is_already_posted(url):
+                target_campaign = camp
+                break
+
+        if not target_campaign:
+            logging.info("새로 포스팅할 미발행 텐핑 캠페인이 없습니다. 파이프라인을 안전하게 종료합니다.")
+            return
+
+        logging.info(f"선정된 발행 타겟 캠페인: {target_campaign['productName']}")
+
+        # 3. 이미지 다운로드 처리
+        h_title = hashlib.md5(target_campaign['productName'].encode('utf-8')).hexdigest()[:8]
+        self._ensure_directories()
+        date_str = _now_kst().strftime("%Y-%m-%d")
+        img_url = target_campaign.get("productImage")
+        
+        processed_campaign = target_campaign.copy()
+        if img_url and "dummy.com" not in img_url:
+            img_filename = f"{date_str}-campaign-{h_title}.jpg"
+            local_img_path = os.path.join(self.image_dir, img_filename)
+            baseurl = self._get_jekyll_baseurl()
+            blog_relative_path = f"{baseurl}/assets/images/posts/{img_filename}"
+            try:
+                logging.info(f"캠페인 이미지 다운로드 시도: {img_url}")
+                headers = {"User-Agent": "Mozilla/5.0"}
+                img_res = requests.get(img_url, headers=headers, timeout=10)
+                if img_res.status_code == 200:
+                    with open(local_img_path, "wb") as f:
+                        f.write(img_res.content)
+                    logging.info(f"이미지 로컬 저장 성공: {local_img_path}")
+                    processed_campaign["productImage"] = blog_relative_path
+            except Exception as e:
+                logging.error(f"이미지 다운로드 중 오류: {e}")
+
+        # 4. AI 콘텐츠 및 카테고리 동적 생성
+        raw_content = self.writer.generate_tenping_campaign_post(processed_campaign)
+
+        # 5. 파싱 및 파일 저장 (categories를 파싱한 다이내믹 저장)
+        parsed_data = _parse_ai_campaign_response(raw_content, processed_campaign["productName"])
+        saved_file, slug = self.writer.write_tenping_markdown_file(parsed_data, processed_campaign)
+
+        logging.info("=========================================")
+        logging.info(f"캠페인 포스팅 완료: {saved_file}")
+        logging.info("=========================================")
+
+        # 6. 텔레그램 알림 전송
+        if saved_file and slug:
+            post_url = f"https://koreameme002.github.io/10ping/posts/{slug}/"
+            msg = (
+                f"🎉 <b>[10ping] 신규 캠페인 자동 발행!</b>\n\n"
+                f"텐핑 최신 제휴 캠페인이 감지되어 정보성 콘텐츠가 블로그에 배포되었습니다.\n\n"
+                f"📌 <b>포스팅 정보</b>\n"
+                f"• <b>캠페인명</b>: {processed_campaign['productName']}\n"
+                f"• <b>분류 카테고리</b>: {parsed_data['category'].upper()}\n"
+                f"• <b>발행 일시</b>: {_now_kst().strftime('%Y-%m-%d %H:%M:%S')} (KST)\n\n"
+                f"🔗 <b>블로그 포스트 보기</b>\n"
+                f"<a href=\"{post_url}\">{post_url}</a>\n\n"
+                f"✅ 깃허브 페이지 빌드가 곧 완료됩니다."
+            )
+            self.notifier.send_message(msg)
+
 def determine_category_by_time() -> str:
     from datetime import datetime, timedelta, timezone
-    # GitHub Actions 등 UTC 환경을 고려하여 KST 구하기
     kst = datetime.now(timezone.utc) + timedelta(hours=9)
     hour = kst.hour
     
     logging.info(f"현재 KST 시각: {kst.strftime('%Y-%m-%d %H:%M:%S')} (시간대: {hour}시)")
 
-    # 1. 아침 시간대 (05:00 ~ 11:59): 건강 (아침방송 연동 및 종합)
     if 5 <= hour < 12:
         return "health"
-    # 2. 점심 시간대 (12:00): AI 뉴스
     elif hour == 12:
         return "ai_news"
-    # 3. 오후 1시 (13:00): 최신 이슈
     elif hour == 13:
         return "latest_issue"
-    # 4. 오후 2~3시 (14:00~15:59): AI 뉴스 (14:30 스케줄 대응)
     elif hour in [14, 15]:
         return "ai_news"
-    # 5. 오후 4시 (16:00): 최신 이슈
     elif hour == 16:
         return "latest_issue"
-    # 6. 오후 5시 (17:00~17:59): AI 뉴스 (17:30 스케줄 대응)
     elif hour == 17:
         return "ai_news"
-    # 7. 오후 6시 (18:00~18:59): 최신 이슈 (18:30 스케줄 대응)
     elif hour == 18:
         return "latest_issue"
-    # 8. 오후 7시 (19:00~19:59): AI 뉴스 (19:30 스케줄 대응)
     elif hour == 19:
         return "ai_news"
-    # 9. 오후 8시 (20:00): 최신 이슈
     elif hour == 20:
         return "latest_issue"
-    # 10. 오후 9시 (21:00): 건강
     elif hour == 21:
         return "health"
-    # 11. 야간 (22:00 ~ 04:59): 최신 이슈 또는 건강
     else:
         return "latest_issue"
 
@@ -213,8 +300,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     category = args.category
-    if category == "auto":
-        category = determine_category_by_time()
-
     controller = AutoPublisherController()
-    controller.run_pipeline(category)
+    if category == "auto":
+        controller.run_tenping_campaign_pipeline()
+    else:
+        controller.run_pipeline(category)

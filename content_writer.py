@@ -157,6 +157,48 @@ def _parse_ai_response(response_text: str, keyword: str) -> dict:
     return {"title": title, "slug": slug, "body": body}
 
 
+def _parse_ai_campaign_response(response_text: str, default_keyword: str) -> dict:
+    """텐핑 캠페인 전용 AI 응답 파서"""
+    category = "lifestyle"
+    title = default_keyword
+    slug = ""
+    body = response_text
+
+    cat_match = re.search(r'\[CATEGORY\]\s*(.*?)\s*(?=\[TITLE\]|\[SLUG\]|\[BODY\]|$)', response_text, re.IGNORECASE | re.DOTALL)
+    title_match = re.search(r'\[TITLE\]\s*(.*?)\s*(?=\[CATEGORY\]|\[SLUG\]|\[BODY\]|$)', response_text, re.IGNORECASE | re.DOTALL)
+    slug_match = re.search(r'\[SLUG\]\s*(.*?)\s*(?=\[CATEGORY\]|\[TITLE\]|\[BODY\]|$)', response_text, re.IGNORECASE | re.DOTALL)
+    body_match = re.search(r'\[BODY\]\s*(.*?)\s*(?=\[CATEGORY\]|\[TITLE\]|\[SLUG\]|$)', response_text, re.IGNORECASE | re.DOTALL)
+
+    if cat_match:
+        raw_cat = cat_match.group(1).strip().lower()
+        valid_cats = ["finance", "education", "lifestyle", "health", "it_tech", "events"]
+        if raw_cat in valid_cats:
+            category = raw_cat
+        else:
+            for c in valid_cats:
+                if c in raw_cat:
+                    category = c
+                    break
+
+    if title_match:
+        title = title_match.group(1).strip().replace('"', '\\"')
+    if slug_match:
+        raw_slug = slug_match.group(1).strip().lower()
+        slug = re.sub(r'[^a-z0-9-]', '-', raw_slug)
+        slug = re.sub(r'-+', '-', slug).strip('-')
+    if body_match:
+        body = body_match.group(1).strip()
+
+    if not slug:
+        h = hashlib.md5(response_text.encode('utf-8')).hexdigest()[:6]
+        slug = f"campaign-{h}"
+
+    if title.startswith("# "):
+        title = title[2:].strip().replace('"', '\\"')
+
+    return {"category": category, "title": title, "slug": slug, "body": body}
+
+
 FORMAT_INSTRUCTION = """
 반드시 아래와 같은 포맷으로만 출력하세요. 다른 인사말이나 설명은 일절 생략하세요:
 
@@ -597,6 +639,211 @@ AI 트렌드는 단순한 기술 이슈를 넘어 **투자·취업·교육** 전
 오늘 이슈도 북마크해 두고 흐름을 놓치지 마세요!
 """.strip()
         return f"[TITLE]\n🔥 왜 갑자기 모두가 '{title}'을 검색하나? 지금 바로 확인하세요\n[SLUG]\n{slug}\n[BODY]\n{body}"
+
+    def generate_tenping_campaign_post(self, campaign: dict) -> str:
+        """텐핑 캠페인 1개를 기반으로 다이내믹 카테고리 분류 및 정보성 포스트를 작성"""
+        if self.gemini_enabled:
+            return self._gemini_campaign_post(campaign)
+        elif self.client:
+            return self._gpt_campaign_post(campaign)
+        return self._fallback_campaign_post(campaign)
+
+    def _gemini_campaign_post(self, campaign: dict) -> str:
+        system = (
+            "대한민국 최고 바이럴 마케터·SEO 카피라이터. "
+            "텐핑 제휴 마케팅 상품 정보를 분석하여 독자에게 유용하고 유익한 정보성 칼럼 블로그 포스팅을 작성한다. "
+            "최종 목적은 자연스럽게 본문에 삽입된 제휴 링크 클릭 및 참여를 유도하는 것이다."
+        )
+        
+        user_prompt = f"""
+광고 상품 정보:
+- 상품명: {campaign['productName']}
+- 상세 정보: {campaign.get('productMemo', '')}
+- 이미지 주소: {campaign['productImage']}
+- 제휴 링크: {campaign['productUrl']}
+
+규칙:
+1. 카테고리 판별:
+   이 광고 상품의 주제와 성격을 분석하여 다음 6개 카테고리 중 반드시 하나를 지정해야 합니다:
+   - finance (재테크, 보험, 금융, 창업 등)
+   - education (교육, 자격증, 영어학습 등)
+   - lifestyle (생활 서비스, 렌탈, 인테리어, 가구 등)
+   - health (건강 기능 식품, 다이어트, 건강 상담 등)
+   - it_tech (IT 기기, 소프트웨어, 모바일 앱 등)
+   - events (이벤트 응모, 무료 샘플 신청, 사은품 등)
+
+2. 포스팅 작성:
+   - 제목: 단순히 상품명이 아닌, 독자의 호기심과 혜택을 부각하는 후킹성 강한 제목을 생성하세요.
+   - 본문: 광고처럼 대놓고 홍보하기보다, 해당 상품과 긴밀하게 연관된 유용한 배경 정보나 팁을 설명하는 정보성 칼럼 형태로 작성하세요.
+   - 링크 삽입: 본문의 적절한 위치(주로 중반부 혹은 후반부 혜택 설명 영역)에 다음 양식으로 이미지와 텍스트 링크를 주입하세요:
+     ![{campaign['productName']}]({campaign['productImage']})
+     <a href="{campaign['productUrl']}" target="_blank" rel="noopener noreferrer">▶ {campaign['productName']} 상세 혜택 확인 및 신청하기</a>
+   - 공정위 문구: 본문 맨 하단에 "※ 이 포스팅은 텐핑 소속 마케터 활동의 일환으로 수수료를 제공받을 수 있습니다." 문구를 삽입하세요.
+
+3. 포맷 지침:
+   반드시 아래 형식으로만 답변을 작성하고 그 외 불필요한 설명은 생략하세요:
+
+   [CATEGORY]
+   (여기에 선정된 영문 카테고리명 한 단어 작성)
+   [TITLE]
+   (여기에 블로그 제목 작성)
+   [SLUG]
+   (여기에 어울리는 3~5단어의 영문 소문자/하이픈 조합 슬러그 작성)
+   [BODY]
+   (여기에 마크다운 본문 작성. 마크다운의 첫 줄에 제목(#)은 쓰지 마세요.)
+"""
+        try:
+            response = self.gemini_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=user_prompt,
+                config={
+                    'system_instruction': system,
+                }
+            )
+            return response.text
+        except Exception as e:
+            logging.error(f"Gemini 캠페인 포스트 생성 실패: {e}")
+            return self._fallback_campaign_post(campaign)
+
+    def _gpt_campaign_post(self, campaign: dict) -> str:
+        system = (
+            "대한민국 최고 바이럴 마케터·SEO 카피라이터. "
+            "텐핑 제휴 마케팅 상품 정보를 분석하여 독자에게 유용하고 유익한 정보성 칼럼 블로그 포스팅을 작성한다. "
+            "최종 목적은 자연스럽게 본문에 삽입된 제휴 링크 클릭 및 참여를 유도하는 것이다."
+        )
+        
+        user_prompt = f"""
+광고 상품 정보:
+- 상품명: {campaign['productName']}
+- 상세 정보: {campaign.get('productMemo', '')}
+- 이미지 주소: {campaign['productImage']}
+- 제휴 링크: {campaign['productUrl']}
+
+규칙:
+1. 카테고리 판별:
+   이 광고 상품의 주제와 성격을 분석하여 다음 6개 카테고리 중 반드시 하나를 지정해야 합니다:
+   - finance (재테크, 보험, 금융, 창업 등)
+   - education (교육, 자격증, 영어학습 등)
+   - lifestyle (생활 서비스, 렌탈, 인테리어, 가구 등)
+   - health (건강 기능 식품, 다이어트, 건강 상담 등)
+   - it_tech (IT 기기, 소프트웨어, 모바일 앱 등)
+   - events (이벤트 응모, 무료 샘플 신청, 사은품 등)
+
+2. 포스팅 작성:
+   - 제목: 단순히 상품명이 아닌, 독자의 호기심과 혜택을 부각하는 후킹성 강한 제목을 생성하세요.
+   - 본문: 광고처럼 대놓고 홍보하기보다, 해당 상품과 긴밀하게 연관된 유용한 배경 정보나 팁을 설명하는 정보성 칼럼 형태로 작성하세요.
+   - 링크 삽입: 본문의 적절한 위치(주로 중반부 혹은 후반부 혜택 설명 영역)에 다음 양식으로 이미지와 텍스트 링크를 주입하세요:
+     ![{campaign['productName']}]({campaign['productImage']})
+     <a href="{campaign['productUrl']}" target="_blank" rel="noopener noreferrer">▶ {campaign['productName']} 상세 혜택 확인 및 신청하기</a>
+   - 공정위 문구: 본문 맨 하단에 "※ 이 포스팅은 텐핑 소속 마케터 활동의 일환으로 수수료를 제공받을 수 있습니다." 문구를 삽입하세요.
+
+3. 포맷 지침:
+   반드시 아래 형식으로만 답변을 작성하고 그 외 불필요한 설명은 생략하세요:
+
+   [CATEGORY]
+   (여기에 선정된 영문 카테고리명 한 단어 작성)
+   [TITLE]
+   (여기에 블로그 제목 작성)
+   [SLUG]
+   (여기에 어울리는 3~5단어의 영문 소문자/하이픈 조합 슬러그 작성)
+   [BODY]
+   (여기에 마크다운 본문 작성. 마크다운의 첫 줄에 제목(#)은 쓰지 마세요.)
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt}
+                ]
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logging.error(f"GPT 캠페인 포스트 생성 실패: {e}")
+            return self._fallback_campaign_post(campaign)
+
+    def _fallback_campaign_post(self, campaign: dict) -> str:
+        return f"""
+[CATEGORY]
+lifestyle
+[TITLE]
+알아두면 혜택 가득한 {campaign['productName']} 정보 요약
+[SLUG]
+benefit-info-{hashlib.md5(campaign['productName'].encode('utf-8')).hexdigest()[:6]}
+[BODY]
+안녕하세요! 오늘은 많은 분들이 관심을 가지고 찾아보시는 유용한 정보인 **{campaign['productName']}**에 대해 요약해 드립니다.
+
+우리가 일상에서 필요로 하거나 알아두면 좋은 다양한 혜택과 서비스들이 참 많은데요. 그중에서도 이 서비스는 많은 이용자들 사이에서 긍정적인 반응을 얻고 있습니다.
+
+### 핵심 혜택 및 장점
+- **편리한 참여**: 복잡한 절차 없이 간편하게 혜택을 조회하고 신청할 수 있습니다.
+- **실용성 중심**: 실생활에 직접적으로 도움이 되는 내용으로 구성되어 있습니다.
+
+아래 썸네일을 통해 자세한 혜택 내용과 무료 상담 및 혜택 신청 경로를 확인해 보세요!
+
+![{campaign['productName']}]({campaign['productImage']})
+<a href="{campaign['productUrl']}" target="_blank" rel="noopener noreferrer">▶ {campaign['productName']} 상세 혜택 확인 및 신청하기</a>
+
+보다 상세하고 전문적인 상담 및 가입은 공식 페이지를 참조하시기 바라며, 합리적인 선택에 도움을 얻으시길 권장합니다.
+
+※ 이 포스팅은 텐핑 소속 마케터 활동의 일환으로 수수료를 제공받을 수 있습니다.
+"""
+
+    def write_tenping_markdown_file(self, parsed_data: dict, campaign: dict) -> tuple:
+        output_dir = "_posts"
+        os.makedirs(output_dir, exist_ok=True)
+
+        now = _now_kst()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%Y-%m-%d %H:%M:%S +0900")
+
+        category = parsed_data["category"]
+        title = parsed_data["title"]
+        slug = parsed_data["slug"]
+        body = parsed_data["body"]
+
+        image_path = ""
+        img_match = re.search(r'!\[.*?\]\((.*?)\)', body)
+        if img_match:
+            raw_img_path = img_match.group(1).strip()
+            baseurl = "/10ping"
+            if raw_img_path.startswith(f"{baseurl}/"):
+                image_path = raw_img_path[len(baseurl)+1:]
+            elif raw_img_path.startswith("/"):
+                image_path = raw_img_path[1:]
+            else:
+                image_path = raw_img_path
+        else:
+            image_path = campaign.get("productImage", "")
+
+        notice_text = "\n\n※ 이 포스팅은 텐핑 소속 마케터 활동의 일환으로 수수료를 제공받을 수 있습니다.\n"
+        if notice_text.strip() not in body:
+            body += notice_text
+
+        filename = f"{date_str}-{slug}.md"
+        file_path = os.path.join(output_dir, filename)
+
+        tag_list = f"텐핑, 제휴마케팅, 추천정보, {category}"
+
+        front_matter = (
+            f"---\n"
+            f"layout: post\n"
+            f"title: \"{title}\"\n"
+            f"date: {time_str}\n"
+            f"permalink: /posts/{slug}/\n"
+            f"image: {image_path}\n"
+            f"author: admin\n"
+            f"description: \"{_make_description(body)}\"\n"
+            f"categories: {category}\n"
+            f"tags: [{tag_list}]\n"
+            f"---\n\n"
+        )
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(front_matter + body)
+
+        logging.info(f"텐핑 캠페인 포스팅 저장 완료: {file_path} (대표 이미지: {image_path}, 카테고리: {category})")
+        return file_path, slug
 
 
 if __name__ == "__main__":
