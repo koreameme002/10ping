@@ -1,0 +1,68 @@
+# Site Settings
+title: "10ping"
+tagline: "실시간 인기 제휴 마케팅 정보 가이드"
+description: "실시간 가장 인기 있는 제휴 정보와 특별 혜택을 한눈에 요약해 드립니다."
+url: "https://koreameme002.github.io"
+baseurl: "/10ping"
+
+# Include
+include:
+  - _pages
+
+# Authors
+authors:
+  admin:
+    name: "10ping"
+    display_name: "10ping Admin"
+    avatar: "/assets/images/logo.png"
+    web: "https://koreameme002.github.io/10ping"
+    description: "실시간 데이터 트렌드와 텐핑 제휴 마케팅을 접목한 고품질 자동 발행 정보 블로그입니다."
+
+# Permalinks
+permalink: /:title/
+
+# Pagination
+paginate: 6
+paginate_path: /page:num/
+
+# Archives
+jekyll-archives:
+  enabled:
+    - categories
+    - tags
+  layout: archive
+  permalinks:
+    category: /category/:name/
+    tag: /tag/:name/
+
+# Plugins
+plugins:
+  - jekyll-paginate
+  - jekyll-sitemap
+  - jekyll-feed
+  - jekyll-seo-tag
+  - jekyll-archives
+
+# Markdown Configuration
+markdown: kramdown
+highlighter: rouge
+
+# Excludes (Jekyll 빌드에서 파이썬 관련 파일 제외)
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor/
+  - venv/
+  - .env
+  - .env.template
+  - main.py
+  - keyword_analyzer.py
+  - coupang_partner.py
+  - tenping_partner.py
+  - content_writer.py
+  - telegram_notifier.py
+  - requirements.txt
+  - test_posts/
+  - .git/
+  - .github/

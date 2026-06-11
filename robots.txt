@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://koreameme002.github.io/10ping/sitemap.xml
