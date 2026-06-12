@@ -10,6 +10,7 @@ import os
 import re
 import hashlib
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 def _now_kst():
@@ -218,17 +219,66 @@ class ContentWriter:
         api_key = os.getenv("OPENAI_API_KEY", "")
         self.client = OpenAI(api_key=api_key) if api_key and api_key != "your_openai_api_key_here" else None
 
-        # Gemini 세팅
-        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        # Gemini 다중 키 로테이션 세팅
+        gemini_keys_str = os.getenv("GEMINI_API_KEYS", "")
+        self.api_keys = [k.strip() for k in gemini_keys_str.split(",") if k.strip()]
+
+        # GEMINI_API_KEYS가 없으면 단일 GEMINI_API_KEY 사용
+        if not self.api_keys:
+            single_key = os.getenv("GEMINI_API_KEY", "")
+            if single_key and single_key != "your_gemini_api_key_here":
+                self.api_keys = [single_key]
+
+        self.current_key_idx = 0
         self.gemini_client = None
         self.gemini_enabled = False
-        if gemini_key and gemini_key != "your_gemini_api_key_here":
+
+        if self.api_keys:
             try:
-                self.gemini_client = genai.Client(api_key=gemini_key)
+                self.gemini_client = genai.Client(api_key=self.api_keys[self.current_key_idx])
                 self.gemini_enabled = True
-                logging.info("Google Gemini API 초기화 성공")
+                logging.info(f"Google Gemini API 초기화 성공 (총 {len(self.api_keys)}개 키 로드)")
             except Exception as e:
                 logging.error(f"Google Gemini API 초기화 실패: {e}")
+
+    def _call_gemini_api(self, user_prompt: str, system_prompt: str) -> str:
+        """429 쿼터 초과 시 API 키를 자동으로 다음 키로 로테이션하여 호출하는 헬퍼 메서드"""
+        if not self.gemini_enabled or not self.api_keys:
+            raise Exception("Gemini API가 활성화되지 않았거나 API 키가 없습니다.")
+
+        total_keys = len(self.api_keys)
+
+        for attempt in range(total_keys):
+            try:
+                if self.gemini_client is None:
+                    self.gemini_client = genai.Client(api_key=self.api_keys[self.current_key_idx])
+
+                response = self.gemini_client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=user_prompt,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction=system_prompt
+                    )
+                )
+                return response.text.strip()
+            except Exception as e:
+                err_str = str(e)
+                # 429 Resource Exhausted 에러 발생 시 다음 키로 스위칭
+                if '429' in err_str:
+                    next_idx = (self.current_key_idx + 1) % total_keys
+                    logging.warning(
+                        f"Gemini 429 쿼터 초과. 키 인덱스 {self.current_key_idx} → {next_idx}로 전환 "
+                        f"(시도 {attempt + 1}/{total_keys})"
+                    )
+                    self.current_key_idx = next_idx
+                    self.gemini_client = None  # 다음 루프에서 새 키로 재생성
+                    time.sleep(1)
+                    continue
+                # 429 외 다른 에러는 즉시 예외 발생
+                logging.error(f"Gemini API 호출 중 오류 발생: {e}")
+                raise e
+
+        raise Exception("모든 등록된 Gemini API 키의 하루 쿼터(한도)가 초과되었습니다.")
 
     # ────────────────────────────────────────────────
     # 공개 메서드
@@ -299,9 +349,13 @@ class ContentWriter:
             f"author: admin\n"
             f"description: \"{description}\"\n"
             f"categories: {cat_map.get(category, 'general')}\n"
-            f"tags: [{tag_map.get(category, keyword)}]\n"
-            f"---\n\n"
         )
+        # 태그 YAML 안전 처리: 쉼표로 분리 후 각 태그를 따옴표로 래핑
+        raw_tags = tag_map.get(category, keyword)
+        tags_list = [t.strip() for t in raw_tags.split(",") if t.strip()]
+        cleaned_tags = [t.replace('[', '').replace(']', '').replace('"', '').strip() for t in tags_list]
+        formatted_tags = ", ".join(f'"{t}"' for t in cleaned_tags)
+        front_matter += f"tags: [{formatted_tags}]\n---\n\n"
 
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(front_matter + body)
@@ -344,14 +398,7 @@ class ContentWriter:
 {FORMAT_INSTRUCTION}
 """
         try:
-            response = self.gemini_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=user,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system
-                )
-            )
-            return response.text.strip()
+            return self._call_gemini_api(user, system)
         except Exception as e:
             logging.error(f"Gemini API 호출 실패(health): {e}")
             return self._fallback_health_post(keyword, products)
@@ -508,14 +555,7 @@ class ContentWriter:
 {FORMAT_INSTRUCTION}
 """
         try:
-            response = self.gemini_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=user,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system
-                )
-            )
-            return response.text.strip()
+            return self._call_gemini_api(user, system)
         except Exception as e:
             logging.error(f"Gemini API 호출 실패(ai_news): {e}")
             return self._fallback_ai_news_body(title, summary)
@@ -601,14 +641,7 @@ AI 트렌드는 단순한 기술 이슈를 넘어 **투자·취업·교육** 전
 {FORMAT_INSTRUCTION}
 """
         try:
-            response = self.gemini_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=user,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system
-                )
-            )
-            return response.text.strip()
+            return self._call_gemini_api(user, system)
         except Exception as e:
             logging.error(f"Gemini API 호출 실패(latest_issue): {e}")
             return self._fallback_issue_body(title, summary)
@@ -693,14 +726,7 @@ AI 트렌드는 단순한 기술 이슈를 넘어 **투자·취업·교육** 전
    (여기에 마크다운 본문 작성. 마크다운의 첫 줄에 제목(#)은 쓰지 마세요.)
 """
         try:
-            response = self.gemini_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=user_prompt,
-                config={
-                    'system_instruction': system,
-                }
-            )
-            return response.text
+            return self._call_gemini_api(user_prompt, system)
         except Exception as e:
             logging.error(f"Gemini 캠페인 포스트 생성 실패: {e}")
             return self._fallback_campaign_post(campaign)
@@ -823,7 +849,10 @@ benefit-info-{hashlib.md5(campaign['productName'].encode('utf-8')).hexdigest()[:
         filename = f"{date_str}-{slug}.md"
         file_path = os.path.join(output_dir, filename)
 
-        tag_list = f"텐핑, 제휴마케팅, 추천정보, {category}"
+        raw_tags = f"텐핑, 제휴마케팅, 추천정보, {category}"
+        tags_list = [t.strip() for t in raw_tags.split(",") if t.strip()]
+        cleaned_tags = [t.replace('[', '').replace(']', '').replace('"', '').strip() for t in tags_list]
+        formatted_tags = ", ".join(f'"{t}"' for t in cleaned_tags)
 
         front_matter = (
             f"---\n"
@@ -835,7 +864,7 @@ benefit-info-{hashlib.md5(campaign['productName'].encode('utf-8')).hexdigest()[:
             f"author: admin\n"
             f"description: \"{_make_description(body)}\"\n"
             f"categories: {category}\n"
-            f"tags: [{tag_list}]\n"
+            f"tags: [{formatted_tags}]\n"
             f"---\n\n"
         )
 
